@@ -43,6 +43,14 @@ config DIGIC
     select PTIMER
     select PFLASH_CFI02
 
+config EMBEDDED_FUZZ
+    bool
+    select ARM_V7M
+
+config EMBEDDED_FUZZ_SOC
+    bool
+    select ARM_V7M
+
 config EXYNOS4
     bool
     select A9MPCORE

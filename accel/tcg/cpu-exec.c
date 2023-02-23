@@ -53,6 +53,8 @@
 #ifndef AFL_QEMU_STATIC_BUILD
   #include <dlfcn.h>
 #endif
+#include "qemuafl/ember.h"
+static bool in_subfork = false;
 
 /***************************
  * VARIOUS AUXILIARY STUFF *
@@ -88,7 +90,7 @@ struct cmp_map *__afl_cmp_map;
 
 /* Set in the child process in forkserver mode: */
 
-static int forkserver_installed = 0;
+int forkserver_installed = 0;
 static int disable_caching = 0;
 
 unsigned char afl_fork_child;
@@ -174,7 +176,7 @@ struct saved_region* memory_snapshot;
 size_t memory_snapshot_len;
 
 static void collect_memory_snapshot(void) {
-
+#ifdef CONFIG_USER_ONLY
   saved_brk = afl_get_brk();
 
   FILE *fp;
@@ -243,11 +245,11 @@ static void collect_memory_snapshot(void) {
     afl_snapshot_take(AFL_SNAPSHOT_BLOCK | AFL_SNAPSHOT_FDS);
     
   fclose(fp);
-
+#endif
 }
 
 static void restore_memory_snapshot(void) {
-
+#ifdef CONFIG_USER_ONLY
   afl_set_brk(saved_brk);
   
   if (lkm_snapshot) {
@@ -269,7 +271,7 @@ static void restore_memory_snapshot(void) {
   }
   
   afl_target_unmap_trackeds();
-
+#endif
 }
 
 /* Set up SHM region and initialize other stuff. */
@@ -360,13 +362,14 @@ void afl_setup(void) {
     }
 
   }
-
+#ifdef CONFIG_USER_ONLY
   if (getenv("AFL_INST_LIBS")) {
-
+#endif
     afl_start_code = 0;
     afl_end_code = (abi_ulong)-1;
-
+#ifdef CONFIG_USER_ONLY
   }
+#endif
   
   if (getenv("AFL_CODE_START"))
     afl_start_code = strtoll(getenv("AFL_CODE_START"), NULL, 16);
@@ -440,7 +443,7 @@ void afl_setup(void) {
 
     }
   }
-
+#ifdef CONFIG_USER_ONLY
   if (have_names) {
     GSList *map_info = read_self_maps();
     for (GSList *s = map_info; s; s = g_slist_next(s)) {
@@ -475,7 +478,7 @@ void afl_setup(void) {
     }
     free_self_maps(map_info);
   }
-
+#endif
   if (getenv("AFL_DEBUG") && afl_instr_code) {
     struct vmrange* n = afl_instr_code;
     while (n) {
@@ -615,14 +618,18 @@ void afl_forkserver(CPUState *cpu) {
 
   if (forkserver_installed == 1) return;
   forkserver_installed = 1;
-
+#ifdef CONFIG_USER_ONLY
   if (getenv("AFL_QEMU_DEBUG_MAPS")) open_self_maps(cpu->env_ptr, 1);
-
+#endif
   pid_t child_pid;
   int   t_fd[2];
   u8    child_stopped = 0;
-  u32   was_killed;
+  u32   exec_status;
   int   status = 0;
+  pid_t   subfork_pids[MAX_SUBFORK] = {0};
+  bool  use_subfork = false;
+  int subfork_base_size = 0;
+  int subfork_cases[MAX_SUBFORK] = {0};
 
   // with the max ID value
   if (MAP_SIZE <= FS_OPT_MAX_MAPSIZE)
@@ -645,9 +652,9 @@ void afl_forkserver(CPUState *cpu) {
 
   if (sharedmem_fuzzing) {
 
-    if (read(FORKSRV_FD, &was_killed, 4) != 4) exit(2);
+    if (read(FORKSRV_FD, &exec_status, 4) != 4) exit(2);
 
-    if ((was_killed & (0xffffffff & (FS_OPT_ENABLED | FS_OPT_SHDMEM_FUZZ))) ==
+    if ((exec_status & (0xffffffff & (FS_OPT_ENABLED | FS_OPT_SHDMEM_FUZZ))) ==
         (FS_OPT_ENABLED | FS_OPT_SHDMEM_FUZZ))
       afl_map_shm_fuzz();
     else {
@@ -667,46 +674,231 @@ void afl_forkserver(CPUState *cpu) {
 
     /* Whoops, parent dead? */
 
-    if (read(FORKSRV_FD, &was_killed, 4) != 4) exit(2);
+    if (read(FORKSRV_FD, &exec_status, 4) != 4) exit(2);
 
     /* If we stopped the child in persistent mode, but there was a race
        condition and afl-fuzz already issued SIGKILL, write off the old
        process. */
 
-    if (child_stopped && was_killed) {
+    if (child_stopped && (exec_status & 1)) {
 
       child_stopped = 0;
       if (waitpid(child_pid, &status, 0) < 0) exit(8);
 
     }
 
-    if (!child_stopped) {
+#ifdef DEBUG_SUBFORK
+    printf("Received state %X\n", exec_status);
+#endif
 
+    int divergence_point = -1;
+    int target_id = 0;
+    int subfork_count;
+
+    if(exec_status & 2){
+#ifdef DEBUG_SUBFORK
+    printf("Generating subfork servers\n");
+#endif
+      subfork_run = true;
+      use_subfork = false;
+      in_subfork = true;
+      subfork_base_size = exec_status >> 12;
+      if(subfork_base_size == ((1<<21)-1)){
+        printf("Input length is invalid\n");
+        exit(3);
+      }
+      if(subfork_base_size > afl_fuzz_size_max)
+        subfork_base_size = afl_fuzz_size_max; // Don't place forkservers after max_size
+      for(int i=0; i<MAX_SUBFORK; i++){
+        subfork_offsets[i] = i*(subfork_base_size/MAX_SUBFORK);// Set target subfork offset
+      }
+      subfork_count = 0;
+    } else if (exec_status & 4){
+#ifdef DEBUG_SUBFORK
+       printf("Will run from subfork\n");
+#endif
+      use_subfork = true;
+      subfork_run = false;
+      in_subfork = true;
+      divergence_point = exec_status >> 12;
+      if(divergence_point == ((1<<21)-1)){
+        printf("Divergence point is invalid\n");
+        exit(3);
+      }
+      if(!subfork_pids[0]){
+        use_subfork = false;
+#ifdef DEBUG_SUBFORK
+        printf("Attempted to use subfork server that doesn't exist!\n");
+#endif
+      }
+    } else {
+      in_subfork = false;
+      use_subfork = false;
+      subfork_run = false;
+      divergence_point = 0;
+    }
+
+#ifdef DEBUG_SUBFORK
+        printf("Setting vars: use_subfork %d, subfork_run %d\n", use_subfork, subfork_run);
+#endif
+
+    if (!child_stopped) {
+      if(!subfork_run){
+        if(!use_subfork){
       /* Establish a channel with child to grab translation commands. We'll
        read from t_fd[0], child will write to TSL_FD. */
 
       if (pipe(t_fd) || dup2(t_fd[1], TSL_FD) < 0) exit(3);
       close(t_fd[1]);
 
-      child_pid = fork();
-      if (child_pid < 0) exit(4);
+          // Kill old subfork servers
+          if(subfork_pids[0]){
+#ifdef DEBUG_SUBFORK
+            printf("Killing subfork servers\n");
+#endif
+            for(int i=0;i<MAX_SUBFORK;i++){
+              if(!subfork_pids[i])
+                break;
+              printf("Attempt to Kill subfork server with pid %d\n",subfork_pids[i]);
+              close(host_pipes[i][1]);
+              close(response_pipes[i][0]);
+              int subfork_status;
+              waitpid(subfork_pids[i], &subfork_status, 0);
+              subfork_pids[i]=0;
+            }
+          }
 
-      if (!child_pid) {
+          child_pid = fork();
+          if (child_pid < 0){
+            printf("Fork failed from forkserver\n");
+            exit(4);
+          }
 
-        /* Child process. Close descriptors and run free. */
+          if (!child_pid) {
 
-        afl_fork_child = 1;
-        close(FORKSRV_FD);
-        close(FORKSRV_FD + 1);
-        close(t_fd[0]);
-        return;
+            /* Child process. Close descriptors and run free. */
 
+            afl_fork_child = 1;
+            close(FORKSRV_FD);
+            close(FORKSRV_FD + 1);
+            close(t_fd[0]);
+            return;
+
+          }
+
+          /* Parent. */
+          close(TSL_FD);
+        } else {
+#ifdef DEBUG_SUBFORK
+          printf("Sending test case to subfork server\n");
+#endif
+          // Pass info to previously generated ideal server
+          for(int i=0; i<MAX_SUBFORK; i++){
+            if(subfork_offsets[i] <= divergence_point){
+              target_id = i;
+            } else {
+              break;
+            }
+          }
+          subfork_cases[target_id]++;
+          int ret = write(host_pipes[target_id][1], &divergence_point, 4);
+          if(ret != 4) {
+            printf("Failed to send divergence point to fd %d, return code %d\n", host_pipes[target_id][1], ret);
+            exit(7);
+          }
+#ifdef DEBUG_SUBFORK
+          printf("Divergence point sent, wait for PID\n");
+#endif
+          ret = read(response_pipes[target_id][0], &child_pid, 4);
+          if(ret != 4) {
+            printf("Failed to get PID, return code %d\n", ret);
+            exit(8);
+          }
+        }
+      } else {
+#ifdef DEBUG_SUBFORK
+          printf("Attempting to build subfork servers\n");
+#endif
+        // Kill old subfork servers
+        if(subfork_pids[0]){
+
+#ifdef DEBUG_SUBFORK
+          printf("Killing subfork servers\n");
+#endif
+          for(int i=0;i<MAX_SUBFORK;i++){
+            if(!subfork_pids[i])
+              break;
+            printf("Attempt to Kill subfork server with pid %d\n",subfork_pids[i]);
+            close(host_pipes[i][1]);
+            close(response_pipes[i][0]);
+            int subfork_status;
+            waitpid(subfork_pids[i], &subfork_status, 0);
+            subfork_pids[i]=0;
+          }
+        }
+        // Build subfork servers
+        for(int i=0;i<MAX_SUBFORK;i++){
+          int ret = pipe(host_pipes[i]);
+          if(ret < 0)
+            printf("Pipe call failed!\n");
+          ret = pipe(response_pipes[i]);
+          if(ret < 0)
+            printf("Pipe call failed!\n");
+          child_pid = fork();
+          if (child_pid < 0){
+            printf("Forking for subfork server failed, errno: %X\n", errno);
+            exit(4);
+          }
+          if(!child_pid){
+            // Child
+            cur_subfork_id = i;
+            close(FORKSRV_FD);
+            close(FORKSRV_FD + 1);
+            for(int j=0; j<i; j++){
+              close(host_pipes[j][1]);
+              close(response_pipes[j][0]);
+            }
+            close(host_pipes[i][1]);
+            close(response_pipes[i][0]);
+            return;
+          } else {
+            // Parent
+            subfork_pids[i] = child_pid;
+#ifdef DEBUG_SUBFORK
+            printf("Starting subfork server %d with fds %d, %d\n", i, host_pipes[i][0], response_pipes[i][1]);
+#endif
+            close(host_pipes[i][0]);
+            host_pipes[i][0] = -1;
+            close(response_pipes[i][1]);
+            response_pipes[i][1] = -1;
+            int in;
+            if(read(response_pipes[i][0],&in,4) != 4) {
+              printf("failed to get response from new subfork server %d with divergence target %d/%d\n", i, subfork_offsets[i], subfork_base_size);
+              exit(5);
+            }
+            if(in < 0){
+              // Subfork server exited early
+#ifdef DEBUG_SUBFORK
+              printf("Subfork init failed, exits before end of test case?");
+#endif
+              subfork_offsets[i] = (MAX_FILE) + 1; // Make sure this subfork won't be used
+            } else {
+              subfork_offsets[i] = in;
+              subfork_count++;
+            }
+            close(TSL_FD);
+            MEM_BARRIER();
+            memset(afl_area_ptr, 0, MAP_SIZE);
+#ifdef DEBUG_SUBFORK
+            printf("Subfork server %d accepted divergence %d\n", i, in);
+#endif
+          }
+        }
+        child_pid = -1;
+#ifdef DEBUG_SUBFORK
+        printf("Subfork servers running (%d/%d)\n",subfork_count,MAX_SUBFORK);
+#endif
       }
-
-      /* Parent. */
-
-      close(TSL_FD);
-
     } else {
 
       /* Special handling for persistent mode: if the child is alive but
@@ -722,12 +914,37 @@ void afl_forkserver(CPUState *cpu) {
     if (write(FORKSRV_FD + 1, &child_pid, 4) != 4) exit(5);
 
     /* Collect translation requests until child dies and closes the pipe. */
-
-    afl_wait_tsl(cpu, t_fd[0]);
+    if(!subfork_run && !use_subfork)
+      afl_wait_tsl(cpu, t_fd[0]);
 
     /* Get and relay exit status to parent. */
 
-    if (waitpid(child_pid, &status, is_persistent ? WUNTRACED : 0) < 0) exit(6);
+#ifdef DEBUG_SUBFORK
+    printf("Interpretted state: use_subfork %d, subfork_run %d\n", use_subfork, subfork_run);
+#endif
+    if(use_subfork){
+      int exit_code_read = read(response_pipes[target_id][0], &status, 4);
+      if(exit_code_read != 4)
+        printf("Error getting child status from subfork server. Subfork server died?\n");
+    } else if(!subfork_run) {
+      pid_t val = waitpid(child_pid, &status, is_persistent ? WUNTRACED : 0);
+      if (val < 0){
+         printf("Waitpid status: %u with return val %d\n", status, val);
+         exit(6);
+      }
+    } else {
+      printf("Must be subfork run, not sending child status\n");
+      if (write(FORKSRV_FD + 1, &subfork_count, 4) != 4){
+        printf("Failed to report subfork count to AFL\n");
+        exit(1);
+      }
+      for(int i=0; i<subfork_count;i++){
+        if (write(FORKSRV_FD + 1, (int*)(subfork_offsets)+i, 4) != 4){
+          printf("Failed to report subfork offset %d to AFL\n",i);
+          exit(1);
+        }
+      }
+    }
 
     /* In persistent mode, the child stops itself with SIGSTOP to indicate
        a successful run. In this case, we want to wake it up without forking
@@ -744,7 +961,9 @@ void afl_forkserver(CPUState *cpu) {
 
     first_run = 0;
 
-    if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(7);
+    if(!subfork_run){
+      if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(7);
+    }
 
   }
 
@@ -756,7 +975,7 @@ void afl_forkserver(CPUState *cpu) {
 static u32 cycle_cnt;
 
 void afl_persistent_iter(CPUArchState *env) {
-
+#ifdef CONFIG_USER_ONLY
   static struct afl_tsl exit_cmd_tsl;
 
   if (!afl_persistent_cnt || --cycle_cnt) {
@@ -806,11 +1025,11 @@ void afl_persistent_iter(CPUArchState *env) {
     exit(0);
 
   }
-
+#endif
 }
 
 void afl_persistent_loop(CPUArchState *env) {
-
+#ifdef CONFIG_USER_ONLY
   if (!afl_fork_child) return;
 
   if (persistent_first_pass) {
@@ -858,7 +1077,7 @@ void afl_persistent_loop(CPUArchState *env) {
     afl_persistent_iter(env);
 
   }
-
+#endif
 }
 
 /* This code is invoked whenever QEMU decides that it doesn't have a
@@ -870,7 +1089,7 @@ static void afl_request_tsl(target_ulong pc, target_ulong cb, uint32_t flags,
                             uint32_t cf_mask, TranslationBlock *last_tb,
                             int tb_exit) {
 
-  if (disable_caching) return;
+  if (disable_caching || should_disable_caching || had_int || in_subfork) return;
 
   struct afl_tsl t;
 
@@ -1394,6 +1613,12 @@ static inline TranslationBlock *tb_find(CPUState *cpu,
     if (last_tb) {
         tb_add_jump(last_tb, tb_exit, tb);
         was_chained = true;
+    }
+    // Try and detect empty infinite loops
+    if(was_chained && last_tb){
+        if(last_tb->pc == tb->pc && tb->icount == 1){
+            ember_handle_infinite_loops();
+        }
     }
     if (was_translated || was_chained) {
         afl_request_tsl(pc, cs_base, flags, cf_mask,

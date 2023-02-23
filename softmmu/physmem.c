@@ -2017,8 +2017,8 @@ static void ram_block_add(RAMBlock *new_block, Error **errp, bool shared)
          * KVM is not used and it may be forked (eg for fuzzing purposes).
          */
         if (!qtest_enabled()) {
-            qemu_madvise(new_block->host, new_block->max_length,
-                         QEMU_MADV_DONTFORK);
+//            qemu_madvise(new_block->host, new_block->max_length,
+//                         QEMU_MADV_DONTFORK);
         }
         ram_block_notify_add(new_block->host, new_block->max_length);
     }

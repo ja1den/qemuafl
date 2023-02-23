@@ -40,7 +40,11 @@
 #define ARM_CPU_FREQ 1000000000 /* FIXME: 1 GHz, should be configurable */
 #define PMCR_NUM_COUNTERS 4 /* QEMU IMPDEF choice */
 
+#include "qemuafl/ember.h"
+
 #ifndef CONFIG_USER_ONLY
+extern bool enforce_strict_rwe, allow_flash_write, allow_null_exec;
+extern int aflReadPos, aflReadSize;
 
 static bool get_phys_addr_lpae(CPUARMState *env, uint64_t address,
                                MMUAccessType access_type, ARMMMUIdx mmu_idx,
@@ -11459,16 +11463,30 @@ static inline void get_phys_addr_pmsav7_default(CPUARMState *env,
          * at the MPU level no other checks are defined.
          */
         switch (address) {
-        case 0x00000000 ... 0x1fffffff: /* ROM */
-        case 0x20000000 ... 0x3fffffff: /* SRAM */
-        case 0x60000000 ... 0x7fffffff: /* RAM */
-        case 0x80000000 ... 0x9fffffff: /* RAM */
-            *prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+        case 0x00000000 ... 0x0000007: /* Don't allow execution of null pointers, these should be stack and exception handler values */
+            if(!allow_null_exec){
+                *prot = PAGE_READ ;
+                if(allow_flash_write)
+                    *prot = PAGE_READ | PAGE_WRITE;
+                break;
+            }
+        case 0x00000008 ... 0x0fffffff: /* ROM */
+            *prot = PAGE_READ | PAGE_EXEC;
+            if(!enforce_strict_rwe || allow_flash_write)
+                *prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
             break;
-        case 0x40000000 ... 0x5fffffff: /* Peripheral */
+        case 0x10000000 ... 0x1fffffff: /* ROM, but some MCUs use for RAM */
         case 0xa0000000 ... 0xbfffffff: /* Device */
         case 0xc0000000 ... 0xdfffffff: /* Device */
         case 0xe0000000 ... 0xffffffff: /* System */
+        case 0x20000000 ... 0x3fffffff: /* SRAM */
+        case 0x60000000 ... 0x7fffffff: /* RAM */
+        case 0x80000000 ... 0x9fffffff: /* RAM */
+            if(!enforce_strict_rwe){
+                *prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+                break;
+            }
+        case 0x40000000 ... 0x5fffffff: /* Peripheral */
             *prot = PAGE_READ | PAGE_WRITE;
             break;
         default:
@@ -12371,7 +12389,11 @@ bool get_phys_addr(CPUARMState *env, target_ulong address,
                       *prot & PAGE_READ ? 'r' : '-',
                       *prot & PAGE_WRITE ? 'w' : '-',
                       *prot & PAGE_EXEC ? 'x' : '-');
-
+        if (arm_feature(env, ARM_FEATURE_M) && ret && aflReadSize>=0) {
+            printf("Aborting due to MPU miss at PC: %X, read %i of %i bytes\n", env->regs[15], aflReadPos, aflReadSize);
+            handle_subfork_exit();
+            abort();
+        }
         return ret;
     }
 

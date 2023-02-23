@@ -6,6 +6,48 @@ HXCOMM construct option structures, enums and help message for specified
 HXCOMM architectures.
 HXCOMM HXCOMM can be used for comments, discarded from both rST and C.
 
+DEFHEADING(Embedded System Fuzzing options:)
+DEF("sram_base", HAS_ARG, QEMU_OPTION_sram_base,
+    "-sram_base      Set the base address for RAM\n", QEMU_ARCH_ARM)
+DEF("sram2_base", HAS_ARG, QEMU_OPTION_sram2_base,
+    "-sram2_base      Set the base address for RAM part 2\n", QEMU_ARCH_ARM)
+DEF("sram3_base", HAS_ARG, QEMU_OPTION_sram3_base,
+    "-sram3_base      Set the base address for RAM part 3\n", QEMU_ARCH_ARM)
+DEF("sram2_size", HAS_ARG, QEMU_OPTION_sram2_size,
+    "-sram2_size      Set the set the size of the RAM segment part 2\n", QEMU_ARCH_ARM)
+DEF("sram3_size", HAS_ARG, QEMU_OPTION_sram3_size,
+    "-sram3_size      Set the set the size of the RAM segment part 3\n", QEMU_ARCH_ARM)
+DEF("flash_base", HAS_ARG, QEMU_OPTION_flash_base,
+    "-flash_base      Set the base address for FLASH\n", QEMU_ARCH_ARM)
+DEF("flash_alias_base", HAS_ARG, QEMU_OPTION_flash_alias_base,
+    "-flash_alias_base      Set the base address for FLASH's alias at another address\n", QEMU_ARCH_ARM)
+DEF("flash_size", HAS_ARG, QEMU_OPTION_flash_size,
+    "-flash_size      Set the set the size of the FLASH segment\n", QEMU_ARCH_ARM)
+DEF("fuzz_input", HAS_ARG, QEMU_OPTION_fuzz_input,
+    "-fuzz_input @@   Use with AFL for file based input\n", QEMU_ARCH_ARM)
+DEF("fuzz_size", HAS_ARG, QEMU_OPTION_fuzz_size,
+    "-fuzz_size       Set the maximum input size for input fuzz cases\n", QEMU_ARCH_ARM)
+DEF("relaxed_validation", 0, QEMU_OPTION_relaxed_validation,
+    "-relaxed_validaiton       Allows writes to ROM and execution from RAM\n", QEMU_ARCH_ARM)
+DEF("allow_flash_write", 0, QEMU_OPTION_allow_flash_write,
+    "-allow_flash_write       Allows writes to ROM\n", QEMU_ARCH_ARM)
+DEF("allow_null_exec", 0, QEMU_OPTION_allow_null_exec,
+    "-allow_null_exec       Allows execution of null pointers\n", QEMU_ARCH_ARM)
+DEF("periph_base", HAS_ARG, QEMU_OPTION_periph_base,
+    "-periph_base      Set the base address for an additional peripheral region\n", QEMU_ARCH_ARM)
+DEF("periph_size", HAS_ARG, QEMU_OPTION_periph_size,
+    "-periph_size      Set the set the size of the additional peripheral region\n", QEMU_ARCH_ARM)
+DEF("vtor_override", HAS_ARG, QEMU_OPTION_vtor_override,
+    "-vtor_override      Set the address of the vtor table\n", QEMU_ARCH_ARM)
+DEF("sram_size", HAS_ARG, QEMU_OPTION_sram_size,
+    "-sram_size      Set the size of the RAM segment part 1\n", QEMU_ARCH_ARM)
+DEF("disable_interrupts", 0, QEMU_OPTION_disable_interrupts,
+    "-disable_interrupts       Prevents triggering external interrupts\n", QEMU_ARCH_ARM)
+DEF("passthrough", HAS_ARG, QEMU_OPTION_passthrough,
+    "-passthrough       Forces control registers at input hex address to maintain values across reads without fuzzer input\n", QEMU_ARCH_ARM)
+DEF("enabled_ints", HAS_ARG, QEMU_OPTION_enabled_ints,
+    "-enabled_ints      Set the interrupts allowed to be triggered\n", QEMU_ARCH_ARM)
+
 DEFHEADING(Standard options:)
 
 DEF("help", 0, QEMU_OPTION_h,

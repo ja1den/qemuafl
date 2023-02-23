@@ -58,6 +58,10 @@ struct generic_api_regs { int v; };
 #define api_regs generic_api_regs
 #endif
 
+#if !defined(CONFIG_USER_ONLY)
+#define abi_ulong target_ulong
+#endif
+
 /* NeverZero */
 
 #if (defined(__x86_64__) || defined(__i386__)) && defined(AFL_QEMU_NOT_ZERO)
@@ -154,7 +158,7 @@ TranslationBlock *afl_gen_edge(CPUState *cpu, unsigned long afl_id);
 /* Check if an address is valid in the current mapping */
 
 static inline int is_valid_addr(target_ulong addr) {
-
+#ifdef CONFIG_USER_ONLY
   int          flags;
   target_ulong page;
 
@@ -162,7 +166,7 @@ static inline int is_valid_addr(target_ulong addr) {
 
   flags = page_get_flags(page);
   if (!(flags & PAGE_VALID) || !(flags & PAGE_READ)) return 0;
-
+#endif
   return 1;
 
 }

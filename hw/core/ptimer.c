@@ -51,6 +51,7 @@ static void ptimer_trigger(ptimer_state *s)
 
 static void ptimer_reload(ptimer_state *s, int delta_adjust)
 {
+#if 0
     uint32_t period_frac;
     uint64_t period;
     uint64_t delta;
@@ -151,10 +152,12 @@ static void ptimer_reload(ptimer_state *s, int delta_adjust)
         s->next_event += ((int64_t)period_frac * delta) >> 32;
     }
     timer_mod(s->timer, s->next_event);
+#endif
 }
 
 static void ptimer_tick(void *opaque)
 {
+#if 0
     ptimer_state *s = (ptimer_state *)opaque;
     bool trigger = true;
 
@@ -197,6 +200,7 @@ static void ptimer_tick(void *opaque)
     }
 
     ptimer_transaction_commit(s);
+#endif
 }
 
 uint64_t ptimer_get_count(ptimer_state *s)

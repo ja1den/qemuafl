@@ -92,6 +92,10 @@ extern __thread struct shadow_stack qasan_shadow_stack;
 #define DO_NOT_USE_QASAN 1
 #endif
 
+#ifndef CONFIG_USER_ONLY
+#define DO_NOT_USE_QASAN 1
+#endif
+
 #ifndef DO_NOT_USE_QASAN
 #define ASAN_NAME_STR "QEMU-AddressSanitizer"
 #include "asan-giovese.h"

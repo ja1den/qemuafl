@@ -18,6 +18,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
+#include "qemuafl/ember.h"
 
 /* qemu timers run at 1GHz.   We want something closer to 1MHz.  */
 #define SYSTICK_SCALE 1000ULL
@@ -50,13 +51,17 @@ static void systick_timer_tick(void *opaque)
         /* Tell the NVIC to pend the SysTick exception */
         qemu_irq_pulse(s->irq);
     }
-    if (ptimer_get_limit(s->ptimer) == 0) {
+//    if (ptimer_get_limit(s->ptimer) == 0) {
         /*
          * Timer expiry with SYST_RVR zero disables the timer
          * (but doesn't clear SYST_CSR.ENABLE)
          */
-        ptimer_stop(s->ptimer);
-    }
+//        ptimer_stop(s->ptimer);
+//    }
+}
+
+static void systick_timer_tick_fake(void *opaque){
+    return;
 }
 
 static MemTxResult systick_read(void *opaque, hwaddr addr, uint64_t *data,
@@ -74,12 +79,15 @@ static MemTxResult systick_read(void *opaque, hwaddr addr, uint64_t *data,
     case 0x0: /* SysTick Control and Status.  */
         val = s->control;
         s->control &= ~SYSTICK_COUNTFLAG;
+        ember_handle_delay(val);
         break;
     case 0x4: /* SysTick Reload Value.  */
-        val = ptimer_get_limit(s->ptimer);
+//        val = ptimer_get_limit(s->ptimer);
+        val = interrupt_gap;
         break;
     case 0x8: /* SysTick Current Value.  */
-        val = ptimer_get_count(s->ptimer);
+//        val = ptimer_get_count(s->ptimer);
+        val = interrupt_counter - 1;
         break;
     case 0xc: /* SysTick Calibration Value.  */
         val = 10000;
@@ -121,6 +129,7 @@ static MemTxResult systick_write(void *opaque, hwaddr addr,
 
         if ((oldval ^ value) & SYSTICK_ENABLE) {
             if (value & SYSTICK_ENABLE) {
+                ember_add_interrupt(ARMV7M_EXCP_SYSTICK);
                 /*
                  * Always reload the period in case board code has
                  * changed system_clock_scale. If we ever replace that
@@ -130,6 +139,7 @@ static MemTxResult systick_write(void *opaque, hwaddr addr,
                 ptimer_set_period(s->ptimer, systick_scale(s));
                 ptimer_run(s->ptimer, 0);
             } else {
+                ember_remove_interrupt(ARMV7M_EXCP_SYSTICK);
                 ptimer_stop(s->ptimer);
             }
         } else if ((oldval ^ value) & SYSTICK_CLKSOURCE) {
@@ -206,7 +216,8 @@ static void systick_instance_init(Object *obj)
 static void systick_realize(DeviceState *dev, Error **errp)
 {
     SysTickState *s = SYSTICK(dev);
-    s->ptimer = ptimer_init(systick_timer_tick, s,
+    systick = s;
+    s->ptimer = ptimer_init(systick_timer_tick_fake, s,
                             PTIMER_POLICY_WRAP_AFTER_ONE_PERIOD |
                             PTIMER_POLICY_NO_COUNTER_ROUND_DOWN |
                             PTIMER_POLICY_NO_IMMEDIATE_RELOAD |

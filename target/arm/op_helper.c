@@ -24,6 +24,7 @@
 #include "internals.h"
 #include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
+#include "qemuafl/ember.h"
 
 #define SIGNBIT (uint32_t)0x80000000
 #define SIGNBIT64 ((uint64_t)1 << 63)
@@ -289,6 +290,7 @@ void HELPER(wfi)(CPUARMState *env, uint32_t insn_len)
     CPUState *cs = env_cpu(env);
     int target_el = check_wfx_trap(env, false);
 
+    ember_handle_halt();
     if (cpu_has_work(cs)) {
         /* Don't bother to go into our "low power state" if
          * we would just wake up immediately.

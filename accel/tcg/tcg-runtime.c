@@ -186,7 +186,9 @@ void HELPER(afl_cmplog_64)(target_ulong cur_loc, target_ulong arg1,
 }
 
 #include <sys/mman.h>
+#ifdef CONFIG_USER_ONLY
 #include "linux-user/qemu.h" /* access_ok decls. */
+#endif
 
 /*
 static int area_is_mapped(void *ptr, size_t len) {
@@ -203,12 +205,12 @@ static int area_is_mapped(void *ptr, size_t len) {
 
 void HELPER(afl_cmplog_rtn)(CPUArchState *env) {
 
-#if defined(TARGET_X86_64)
+#if defined(TARGET_X86_64) && defined(CONFIG_USER_ONLY)
 
   target_ulong arg1 = env->regs[R_EDI];
   target_ulong arg2 = env->regs[R_ESI];
 
-#elif defined(TARGET_I386)
+#elif defined(TARGET_I386) && defined(CONFIG_USER_ONLY)
 
   target_ulong *stack = AFL_G2H(env->regs[R_ESP]);
   
@@ -228,7 +230,7 @@ void HELPER(afl_cmplog_rtn)(CPUArchState *env) {
   return;
 
 #endif
-
+#ifdef CONFIG_USER_ONLY
   if (!access_ok(env_cpu(env), VERIFY_READ, arg1, 0x20) ||
       !access_ok(env_cpu(env), VERIFY_READ, arg2, 0x20))
     return;
@@ -257,7 +259,7 @@ void HELPER(afl_cmplog_rtn)(CPUArchState *env) {
                    ptr1, 32);
   __builtin_memcpy(((struct cmpfn_operands *)__afl_cmp_map->log[k])[hits].v1,
                    ptr2, 32);
-
+#endif
 }
 
 /* 32-bit helpers */

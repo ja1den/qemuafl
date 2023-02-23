@@ -29,6 +29,7 @@
 #include "trace.h"
 #include "sysemu/kvm.h"
 #include "sysemu/qtest.h"
+#include "qemuafl/ember.h"
 
 /* #define DEBUG_GIC */
 
@@ -1249,6 +1250,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                     trace_gic_enable_irq(irq + i);
                 }
                 GIC_DIST_SET_ENABLED(irq + i, cm);
+                ember_add_interrupt(irq+i-16);
                 /* If a raised level triggered IRQ enabled then mark
                    is as pending.  */
                 if (GIC_DIST_TEST_LEVEL(irq + i, mask)
@@ -1281,6 +1283,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                     trace_gic_disable_irq(irq + i);
                 }
                 GIC_DIST_CLEAR_ENABLED(irq + i, cm);
+                ember_remove_interrupt(irq+i-16);
             }
         }
     } else if (offset < 0x280) {

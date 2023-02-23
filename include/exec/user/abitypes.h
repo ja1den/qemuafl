@@ -3,6 +3,10 @@
 
 #include "cpu.h"
 
+#ifndef CONFIG_USER_ONLY
+#define abi_ulong target_ulong
+#endif
+
 #ifdef TARGET_ABI32
 #define TARGET_ABI_BITS 32
 #else

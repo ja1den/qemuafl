@@ -35,8 +35,9 @@
 #include "qemu/accel.h"
 #include "hw/boards.h"
 #include "migration/vmstate.h"
+#include "qemuafl/ember.h"
 
-//#define DEBUG_UNASSIGNED
+#define DEBUG_UNASSIGNED
 
 static unsigned memory_region_transaction_depth;
 static bool memory_region_update_pending;
@@ -1278,6 +1279,14 @@ static uint64_t unassigned_mem_read(void *opaque, hwaddr addr,
 #ifdef DEBUG_UNASSIGNED
     printf("Unassigned mem read " TARGET_FMT_plx "\n", addr);
 #endif
+    // Check executing has started, and this isn't part of QEMU init
+    CPUState* cpu = first_cpu;
+    if(!cpu)
+      return 0;
+    if(aflReadSize <= 0)
+      return 0;
+    handle_subfork_exit();
+    abort();
     return 0;
 }
 
@@ -1287,6 +1296,14 @@ static void unassigned_mem_write(void *opaque, hwaddr addr,
 #ifdef DEBUG_UNASSIGNED
     printf("Unassigned mem write " TARGET_FMT_plx " = 0x%"PRIx64"\n", addr, val);
 #endif
+    // Check executing has started, and this isn't part of QEMU init
+    CPUState* cpu = first_cpu;
+    if(!cpu)
+      return;
+    if(aflReadSize <= 0)
+      return;
+    handle_subfork_exit();
+    abort();
 }
 
 static bool unassigned_mem_accepts(void *opaque, hwaddr addr,

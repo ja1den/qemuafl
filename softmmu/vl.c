@@ -122,6 +122,8 @@
 #include "sysemu/iothread.h"
 #include "qemu/guest-random.h"
 
+#include "qemuafl/ember.h"
+
 #define MAX_VIRTIO_CONSOLES 1
 
 typedef struct BlockdevOptionsQueueEntry {
@@ -145,7 +147,14 @@ static QemuPluginList plugin_list = QTAILQ_HEAD_INITIALIZER(plugin_list);
 static BlockdevOptionsQueue bdo_queue = QSIMPLEQ_HEAD_INITIALIZER(bdo_queue);
 static bool nographic = false;
 static int mem_prealloc; /* force preallocation of physical target memory */
-static ram_addr_t ram_size;
+ram_addr_t ram_size;
+uint32_t sram_base = 0x20000000, sram2_base = 0, sram3_base = 0, sram_size = 0, sram2_size = 0, sram3_size = 0, flash_base = 0x08000000, flash_size = 2*1024*1024, afl_fuzz_size_max = 65536, periph_size = 0;
+unsigned int passthrough_reg_count = 0;
+struct passthroughReg *passthrough_regs = NULL;
+long int flash_alias_base = -1, periph_base = -1, vtor_override = -1;
+bool enforce_strict_rwe = true, allow_flash_write = false, dma_hardcode = false, allow_null_exec = false;
+const char* aflInput = NULL;
+extern int enabled_ints[256];
 static const char *vga_model = NULL;
 static DisplayOptions dpy;
 static int num_serial_hds;
@@ -1962,7 +1971,7 @@ static void set_memory_options(MachineClass *mc)
         sz = default_ram_size;
     }
 
-    sz = QEMU_ALIGN_UP(sz, 8192);
+//    sz = QEMU_ALIGN_UP(sz, 8192);
     if (mc->fixup_ram_size) {
         sz = mc->fixup_ram_size(sz);
     }
@@ -2660,10 +2669,156 @@ void qemu_init(int argc, char **argv, char **envp)
                 exit(1);
             }
             switch(popt->index) {
+            case QEMU_OPTION_sram_base:
+                sram_base = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_sram2_base:
+                sram2_base = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_sram3_base:
+                sram3_base = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_sram2_size:{
+                uint64_t sz;
+                int res = qemu_strtosz_MiB(optarg, NULL, &sz);
+                if(res){
+                    printf("ERROR READING SRAM2 SIZE\n");
+                    exit(1);
+                }
+                sram2_size = sz;
+                break;
+            }
+            case QEMU_OPTION_sram3_size:{
+                uint64_t sz;
+                int res = qemu_strtosz_MiB(optarg, NULL, &sz);
+                if(res){
+                    printf("ERROR READING SRAM3 SIZE\n");
+                    exit(1);
+                }
+                sram3_size = sz;
+                break;
+            }
+            case QEMU_OPTION_flash_base:
+                flash_base = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_flash_alias_base:
+                flash_alias_base = strtol(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_flash_size:{
+                uint64_t sz;
+                int res = qemu_strtosz_MiB(optarg, NULL, &sz);
+                if(res){
+                    printf("ERROR READING FLASH SIZE\n");
+                    exit(1);
+                }
+                flash_size = sz;
+                break;
+            }
+            case QEMU_OPTION_periph_base:
+                periph_base = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_periph_size:{
+                uint64_t sz;
+                int res = qemu_strtosz_MiB(optarg, NULL, &sz);
+                if(res){
+                    printf("ERROR READING USER PERIPHERAL SIZE\n");
+                    exit(1);
+                }
+                periph_size = sz;
+                break;
+            }
+            case QEMU_OPTION_fuzz_input:
+                printf("Setting input file to %s\n", optarg);
+                aflInput = optarg;
+                break;
+            case QEMU_OPTION_fuzz_size:
+                printf("Setting fuzz case size limit to %s\n", optarg);
+                afl_fuzz_size_max = strtoul(optarg, NULL, 0);
+                break;
+            case QEMU_OPTION_relaxed_validation:
+                enforce_strict_rwe = false;
+                break;
+            case QEMU_OPTION_allow_flash_write:
+                allow_flash_write = true;
+                break;
+           case QEMU_OPTION_allow_null_exec:
+                allow_null_exec = true;
+                break;
+            case QEMU_OPTION_vtor_override:
+                vtor_override = strtoul(optarg, NULL, 0);
+                break;
             case QEMU_OPTION_cpu:
                 /* hw initialization will check this */
                 cpu_option = optarg;
                 break;
+            case QEMU_OPTION_sram_size:{
+                uint64_t sz;
+                int res = qemu_strtosz_MiB(optarg, NULL, &sz);
+                if(res){
+                    printf("ERROR READING SRAM SIZE\n");
+                    exit(1);
+                }
+                sram_size = sz;
+                break;
+            }
+            case QEMU_OPTION_passthrough:{
+                printf("Passthrough regs: %s\n", optarg);
+                uint32_t idx = 0,addr = 0;
+                bool stringEnd = false;
+                while(!stringEnd){
+                    char c = optarg[idx];
+                    if(c == ',' || c == '\0'){
+                        passthrough_reg_count++;
+                        passthrough_regs = realloc(passthrough_regs, passthrough_reg_count * sizeof(struct passthroughReg));
+                        passthrough_regs[passthrough_reg_count - 1].addr = addr;
+                        passthrough_regs[passthrough_reg_count - 1].val = 0;
+                        addr = 0;
+                        stringEnd = (c == '\0');
+                    } else if((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')){
+                        uint8_t nibble;
+                        if(c <= '9'){
+                            nibble = c - '0';
+                        } else if(c <= 'F'){
+                            nibble = 10 + c - 'A';
+                        } else {
+                            nibble = 10 + c - 'a';
+                        }
+                        addr = (addr * 16) + nibble;
+                    } else {
+                        printf("Invalid configuration for enabled interrupts, got digit %c\n",optarg[idx]);
+                        exit(1);
+                    }
+                    idx++;
+                }
+                break;
+            }
+            case QEMU_OPTION_disable_interrupts:
+                disable_interrupts = true;
+                break;
+            case QEMU_OPTION_enabled_ints:{
+                printf("Enabled interrupts: %s\n", optarg);
+                int idx = 0,interrupt = 0,offset = 0;
+                while(optarg[idx] != '\0'){
+                    if(optarg[idx] == ','){
+                        if(interrupt > 0 && interrupt < 256){
+                            enabled_ints[offset] = interrupt;
+                            offset++;
+                            interrupt = 0;
+                        } else {
+                            printf("Invalid configuration for enabled interrupts, got input %d\n", interrupt);
+                            exit(1);
+                        }
+                    } else if(optarg[idx] >= '0' && optarg[idx] <= '9'){
+                        interrupt = (interrupt * 10) + (optarg[idx] - '0');
+                    } else {
+                        printf("Invalid configuration for enabled interrupts, got digit %c\n",optarg[idx]);
+                        exit(1);
+                    }
+                    idx++;
+                }
+                enabled_ints[offset] = interrupt;
+                break;
+            }
             case QEMU_OPTION_hda:
             case QEMU_OPTION_hdb:
             case QEMU_OPTION_hdc:

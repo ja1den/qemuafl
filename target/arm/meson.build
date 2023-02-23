@@ -29,6 +29,7 @@ arm_ss.add(files(
   'vec_helper.c',
   'vfp_helper.c',
   'cpu_tcg.c',
+  'ember.c',
 ))
 arm_ss.add(zlib)
 

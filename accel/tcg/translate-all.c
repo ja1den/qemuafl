@@ -67,11 +67,13 @@
 #include "tcg/tcg-op.h"
 
 #include <math.h>
+#include "qemuafl/ember.h"
 
 __thread int cur_block_is_good;
 
 void HELPER(afl_maybe_log)(target_ulong cur_loc) {
-
+  if(ember_manage_ints())
+    return;
   register uintptr_t afl_idx = cur_loc ^ afl_prev_loc;
 
   INC_AFL_AREA(afl_idx);

@@ -23,6 +23,8 @@
 #include "exec/address-spaces.h"
 #include "target/arm/idau.h"
 
+extern long int vtor_override;
+
 /* Bitbanded IO.  Each word corresponds to a single bit.  */
 
 /* Get the byte address of the real memory for a bitband access.  */
@@ -292,6 +294,7 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
 {
     int image_size;
     uint64_t entry;
+    uint64_t lowaddr;
     int big_endian;
     AddressSpace *as;
     int asidx;
@@ -312,7 +315,7 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
 
     if (kernel_filename) {
         image_size = load_elf_as(kernel_filename, NULL, NULL, NULL,
-                                 &entry, NULL, NULL,
+                                 &entry, &lowaddr, NULL,
                                  NULL, big_endian, EM_ARM, 1, 0, as);
         if (image_size < 0) {
             image_size = load_image_targphys_as(kernel_filename, 0,
@@ -322,6 +325,12 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
             error_report("Could not load kernel '%s'", kernel_filename);
             exit(1);
         }
+    }
+
+    if(vtor_override >= 0){
+        cpu->init_svtor = vtor_override;
+    } else {
+        cpu->init_svtor = lowaddr;
     }
 
     /* CPU objects (unlike devices) are not automatically reset on system

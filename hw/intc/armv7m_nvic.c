@@ -26,6 +26,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
+#include "qemuafl/ember.h"
 
 /* IRQ number counting:
  *
@@ -2359,6 +2360,7 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
             if (value & (1 << i) &&
                 (attrs.secure || s->itns[startvec + i])) {
                 s->vectors[startvec + i].enabled = setval;
+                setval ? ember_add_interrupt(startvec+i) : ember_remove_interrupt(startvec+i);
             }
         }
         nvic_irq_update(s);
