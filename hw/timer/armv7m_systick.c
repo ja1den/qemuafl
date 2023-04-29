@@ -40,7 +40,7 @@ static inline int64_t systick_scale(SysTickState *s)
     }
 }
 
-static void systick_timer_tick(void *opaque)
+void systick_timer_tick(void *opaque)
 {
     SysTickState *s = (SysTickState *)opaque;
 
